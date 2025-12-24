@@ -5,18 +5,18 @@
 define('DATA_DIR', __DIR__ . '/data');
 define('ALLOWED_ACCESS_KEYS', ['put_your_key_here']);
 define('MAX_REQUEST_SIZE', 100 * 1024 * 1024); // 100MB
-define('S3_XML_NS', 'http://s3.amazonaws.com/doc/2006-03-01/'); // [优化] S3 XML 命名空间
+define('S3_XML_NS', 'http://s3.amazonaws.com/doc/2006-03-01/'); // S3 XML namespace
 
 // Helper functions
 function extract_access_key_id()
 {
-    // 从 Authorization header 提取
+    // Extract from Authorization header
     $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
     if (preg_match('/AWS4-HMAC-SHA256 Credential=([^\/]+)\//', $authorization, $matches)) {
         return $matches[1];
     }
 
-    // 从 X-Amz-Credential URL 参数提取
+    // Extract from X-Amz-Credential URL parameter
     $credential = $_GET['X-Amz-Credential'] ?? '';
     if ($credential) {
         $parts = explode('/', $credential);
@@ -30,20 +30,20 @@ function auth_check()
 {
     $access_key_id = extract_access_key_id();
     if (!$access_key_id || !in_array($access_key_id, ALLOWED_ACCESS_KEYS)) {
-        // [优化] 使用标准S3错误码和HTTP状态码
+        // Use standard S3 error codes and HTTP status codes
         generate_s3_error_response('AccessDenied', 'Access Denied', 401);
     }
     return true;
 }
 
-// [优化] S3错误响应函数，分离S3错误码和HTTP状态码
+// S3 error response function, separating S3 error codes from HTTP status codes
 function generate_s3_error_response($s3_code, $message, $http_status, $resource = '')
 {
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><Error xmlns="' . S3_XML_NS . '"></Error>');
     $xml->addChild('Code', $s3_code);
     $xml->addChild('Message', $message);
     $xml->addChild('Resource', $resource);
-    $xml->addChild('RequestId', bin2hex(random_bytes(8))); // 增加 RequestId 提高兼容性
+    $xml->addChild('RequestId', bin2hex(random_bytes(8))); // Add RequestId for better compatibility
 
     header('Content-Type: application/xml');
     http_response_code((int) $http_status);
@@ -58,11 +58,11 @@ function generate_s3_list_objects_response($files, $bucket, $prefix = '')
     $xml->addChild('Prefix', $prefix);
     $xml->addChild('MaxKeys', '1000');
     $xml->addChild('IsTruncated', 'false');
-    // 暂不实现 CommonPrefixes (delimiter)，保持最小可用
+    // Not implementing CommonPrefixes (delimiter) for now, keeping minimal
 
     foreach ($files as $file) {
         $contents = $xml->addChild('Contents');
-        $contents->addChild('Key', htmlspecialchars($file['key'])); // [优化] 确保key中的XML特殊字符被转义
+        $contents->addChild('Key', htmlspecialchars($file['key'])); // Ensure XML special characters in key are escaped
         $contents->addChild('LastModified', date('Y-m-d\TH:i:s.000\Z', $file['timestamp']));
         $contents->addChild('Size', $file['size']);
         $contents->addChild('StorageClass', 'STANDARD');
@@ -96,7 +96,7 @@ function generate_s3_create_multipart_upload_response($bucket, $key, $uploadId)
 {
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><InitiateMultipartUploadResult xmlns="' . S3_XML_NS . '"></InitiateMultipartUploadResult>');
     $xml->addChild('Bucket', $bucket);
-    $xml->addChild('Key', htmlspecialchars($key)); // [优化] 转义
+    $xml->addChild('Key', htmlspecialchars($key)); // Escape special characters
     $xml->addChild('UploadId', $uploadId);
 
     header('Content-Type: application/xml');
@@ -109,14 +109,14 @@ function generate_s3_complete_multipart_upload_response($bucket, $key, $location
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><CompleteMultipartUploadResult xmlns="' . S3_XML_NS . '"></CompleteMultipartUploadResult>');
     $xml->addChild('Location', $location);
     $xml->addChild('Bucket', $bucket);
-    $xml->addChild('Key', htmlspecialchars($key)); // [优化] 转义
+    $xml->addChild('Key', htmlspecialchars($key)); // Escape special characters
 
     header('Content-Type: application/xml');
     echo $xml->asXML();
     exit;
 }
 
-// [新增] S3 ListParts 响应
+// S3 ListParts response
 function generate_s3_list_parts_response($bucket, $key, $uploadId, $parts)
 {
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><ListPartsResult xmlns="' . S3_XML_NS . '"></ListPartsResult>');
@@ -139,7 +139,7 @@ function generate_s3_list_parts_response($bucket, $key, $uploadId, $parts)
     exit;
 }
 
-// [新增] S3 CopyObject 响应
+// S3 CopyObject response
 function generate_s3_copy_object_response($etag, $lastModified)
 {
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult xmlns="' . S3_XML_NS . '"></CopyObjectResult>');
@@ -152,7 +152,7 @@ function generate_s3_copy_object_response($etag, $lastModified)
 }
 
 
-// [新增] S3 DeleteObjects (Bulk Delete) 响应
+// S3 DeleteObjects (Bulk Delete) response
 function generate_s3_delete_objects_response($deleted, $errors)
 {
     $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="' . S3_XML_NS . '"></DeleteResult>');
@@ -170,20 +170,20 @@ function generate_s3_delete_objects_response($deleted, $errors)
     }
 
     header('Content-Type: application/xml');
-    http_response_code(200); // 批量删除无论成功与否，HTTP状态码通常都是200
+    http_response_code(200); // Bulk delete returns 200 regardless of individual success/failure
     echo $xml->asXML();
     exit;
 }
 
 
 function decode_s3_key($key) {
-    // S3使用rawurlencode，但有些客户端会把空格发成'+'
+    // S3 uses rawurlencode, but some clients send spaces as '+'
     $decoded = str_replace('+', ' ', $key);
     return rawurldecode($decoded);
 }
 
 function encode_s3_key($key) {
-    // S3的Key编码是按'/'分割后，对每一部分进行rawurlencode
+    // S3 key encoding: split by '/' and rawurlencode each part
     $parts = explode('/', $key);
     $encodedParts = array_map('rawurlencode', $parts);
     return implode('/', $encodedParts);
@@ -215,36 +215,36 @@ function list_files($bucket, $prefix = '')
         return $files;
     }
 
-    // 解码前缀用于文件系统搜索
+    // Decode prefix for filesystem search
     $decodedPrefix = $prefix ? decode_s3_key($prefix) : '';
 
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS));
 
     foreach ($iterator as $file) {
-        // [优化] 跳过目录本身和我们内部的.multipart目录
+        // Skip directories and internal .multipart directory
         if ($file->isDir()) {
             continue;
         }
         
         $filePath = $file->getRealPath();
         
-        // [优化] 跳过内部分块上传目录
+        // Skip internal multipart upload directory
         if (strpos($filePath, DIRECTORY_SEPARATOR . '.multipart' . DIRECTORY_SEPARATOR) !== false) {
             continue;
         }
 
         $relativePath = str_replace('\\', '/', substr($filePath, strlen($dir) + 1));
 
-        // 关键修复：在文件系统中使用解码后的路径进行比较
+        // Key fix: use decoded path for filesystem comparison
         if ($decodedPrefix && strpos($relativePath, $decodedPrefix) !== 0) {
             continue;
         }
 
-        // [关键修复] 返回给S3客户端的Key必须是S3编码格式
+        // Key returned to S3 client must be in S3 encoded format
         $s3Key = encode_s3_key($relativePath);
         
         $files[] = [
-            'key' => $s3Key, // 返回S3编码后的键名
+            'key' => $s3Key, // Return S3-encoded key name
             'size' => $file->getSize(),
             'timestamp' => $file->getMTime()
         ];
@@ -270,13 +270,13 @@ function safe_delete_directory($dir) {
     return rmdir($dir);
 }
 
-// 统一文件路径处理 (使用解码后的Key)
+// Unified file path handling (using decoded key)
 function get_file_path($bucket, $key) {
     $decodedKey = decode_s3_key($key);
     return DATA_DIR . "/{$bucket}/{$decodedKey}";
 }
 
-// [优化] 流式复制函数
+// Stream copy function
 function stream_copy($source, $dest) {
     $inputStream = fopen($source, 'rb');
     $outputStream = fopen($dest, 'wb');
@@ -296,30 +296,30 @@ if (!file_exists(DATA_DIR)) {
     mkdir(DATA_DIR, 0777, true);
 }
 
-// 主请求处理逻辑
+// Main request handling logic
 $method = $_SERVER['REQUEST_METHOD'];
 
-// 设置跨域头
+// Set CORS headers
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS, HEAD");
 header("Access-Control-Allow-Headers: Content-Type, Authorization, Content-Range, Range, X-Amz-Copy-Source");
-header("Access-Control-Expose-Headers: ETag, Content-Length, Content-Range"); // [优化] 暴露 ETag 等
+header("Access-Control-Expose-Headers: ETag, Content-Length, Content-Range"); // Expose ETag etc.
 header("Access-Control-Max-Age: 86400");
 
-// 处理 OPTIONS 预检请求
+// Handle OPTIONS preflight request
 if ($method === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
 
-// 解析路径 - 保持原始编码的key
+// Parse path - keep key in original encoded form
 $request_uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $path_parts = explode('/', trim($request_uri, '/'));
 $bucket = $path_parts[0] ?? '';
-// 保持key的原始编码状态
+// Keep key in original encoded state
 $key = implode('/', array_slice($path_parts, 1));
 
-// 认证检查
+// Authentication check
 auth_check();
 
 // Check request size
@@ -334,11 +334,11 @@ switch ($method) {
             generate_s3_error_response('InvalidBucketName', 'Bucket name required', 400);
         }
         
-        // [新增] 检查是否为 CopyObject
+        // Check if this is a CopyObject request
         $copySource = $_SERVER['HTTP_X_AMZ_COPY_SOURCE'] ?? null;
         
         if (empty($key) && !$copySource) {
-            // 创建 Bucket
+            // Create Bucket
             $bucketDir = DATA_DIR . "/{$bucket}";
             if (!file_exists($bucketDir)) {
                 mkdir($bucketDir, 0777, true);
@@ -348,14 +348,14 @@ switch ($method) {
         }
 
         if ($copySource) {
-            // [新增] 处理 CopyObject
-            // $copySource 格式: /source-bucket/source-key (key是URL编码的)
+            // Handle CopyObject
+            // $copySource format: /source-bucket/source-key (key is URL encoded)
             $sourceParts = explode('/', ltrim($copySource, '/'), 2);
             if (count($sourceParts) < 2) {
                 generate_s3_error_response('InvalidRequest', 'Invalid x-amz-copy-source header', 400);
             }
             $sourceBucket = $sourceParts[0];
-            $sourceKey = $sourceParts[1]; // sourceKey 保持编码状态
+            $sourceKey = $sourceParts[1]; // sourceKey stays encoded
             
             $sourcePath = get_file_path($sourceBucket, $sourceKey);
             $destPath = get_file_path($bucket, $key);
@@ -390,7 +390,7 @@ switch ($method) {
 
             $partPath = "{$uploadDir}/{$partNumber}";
 
-            // [优化] 使用流式传输，避免内存溢出
+            // Use streaming to avoid memory overflow
             if (!stream_copy('php://input', $partPath)) {
                 generate_s3_error_response('InternalError', 'Failed to write part file', 500, "/{$bucket}/{$key}");
             }
@@ -407,7 +407,7 @@ switch ($method) {
                 mkdir($dir, 0777, true);
             }
 
-            // [优化] 使用流式传输，避免内存溢出
+            // Use streaming to avoid memory overflow
             if (!stream_copy('php://input', $filePath)) {
                 generate_s3_error_response('InternalError', 'Failed to write object file', 500, "/{$bucket}/{$key}");
             }
@@ -420,13 +420,13 @@ switch ($method) {
 
 
 case 'POST':
-        // [修改] Bucket 检查是必须的
+        // Bucket validation is required
         if (empty($bucket)) {
             generate_s3_error_response('InvalidRequest', 'Bucket name required', 400);
         }
         
         if (isset($_GET['delete'])) {
-            // [新增] 处理 DeleteObjects (Bulk Delete)
+            // Handle DeleteObjects (Bulk Delete)
             $input = file_get_contents('php://input');
             libxml_use_internal_errors(true);
             $xml = simplexml_load_string($input);
@@ -438,7 +438,7 @@ case 'POST':
             $errors = [];
 
             foreach ($xml->Object as $object) {
-                $key = (string)$object->Key; // Key 是 S3 编码的
+                $key = (string)$object->Key; // Key is S3 encoded
                 if (empty($key)) continue;
 
                 $filePath = get_file_path($bucket, $key);
@@ -447,7 +447,7 @@ case 'POST':
                     if (unlink($filePath)) {
                         $deleted[] = $key;
                         
-                        // [优化] 复用单文件删除的目录清理逻辑
+                        // Reuse single file delete directory cleanup logic
                         $dir = dirname($filePath);
                         while ($dir !== (DATA_DIR . "/{$bucket}") && $dir !== DATA_DIR && is_dir($dir)) {
                             if (count(scandir($dir)) === 2) { // only . and ..
@@ -458,11 +458,11 @@ case 'POST':
                             }
                         }
                     } else {
-                        // 文件存在但删除失败
+                        // File exists but deletion failed
                         $errors[] = ['key' => $key, 'code' => 'AccessDenied', 'message' => 'Error deleting file'];
                     }
                 } else {
-                    // S3 规范：删除一个不存在的 Key 视为成功
+                    // S3 spec: deleting a non-existent key is considered success
                     $deleted[] = $key;
                 }
             }
@@ -470,7 +470,7 @@ case 'POST':
             generate_s3_delete_objects_response($deleted, $errors);
 
         } elseif (isset($_GET['uploads'])) {
-            // [修改] Key 检查移到这里
+            // Key validation moved here
             if (empty($key)) {
                  generate_s3_error_response('InvalidRequest', 'Key required for multipart upload', 400);
             }
@@ -483,7 +483,7 @@ case 'POST':
             generate_s3_create_multipart_upload_response($bucket, $key, $uploadId);
 
         } elseif (isset($_GET['uploadId'])) {
-            // [修改] Key 检查移到这里
+            // Key validation moved here
             if (empty($key)) {
                  generate_s3_error_response('InvalidRequest', 'Key required for multipart upload', 400);
             }
@@ -498,7 +498,7 @@ case 'POST':
 
             // Parse parts from XML
             $input = file_get_contents('php://input');
-            libxml_use_internal_errors(true); // [优化] 抑制XML解析警告
+            libxml_use_internal_errors(true); // Suppress XML parsing warnings
             $xml = simplexml_load_string($input);
             if (!$xml) {
                 generate_s3_error_response('InvalidXML', 'Invalid XML', 400, "/{$bucket}/{$key}");
@@ -560,11 +560,11 @@ case 'POST':
         } elseif (empty($key)) {
             // List objects in bucket
             $prefix = $_GET['prefix'] ?? '';
-            // $delimiter = $_GET['delimiter'] ?? null; // 暂不实现
+            // $delimiter = $_GET['delimiter'] ?? null; // Not implemented yet
             $files = list_files($bucket, $prefix);
             generate_s3_list_objects_response($files, $bucket, $prefix);
         } else {
-            // Check for ListParts [新增]
+            // Check for ListParts
             if (isset($_GET['uploadId'])) {
                 $uploadId = $_GET['uploadId'];
                 $decodedKey = decode_s3_key($key);
@@ -577,7 +577,7 @@ case 'POST':
                 $parts = [];
                 $items = scandir($uploadDir);
                 foreach ($items as $item) {
-                    if (ctype_digit($item)) { // partNumber 必须是数字
+                    if (ctype_digit($item)) { // partNumber must be numeric
                         $partPath = "{$uploadDir}/{$item}";
                         $parts[] = [
                             'number' => (int)$item,
@@ -587,7 +587,7 @@ case 'POST':
                         ];
                     }
                 }
-                // 按 PartNumber 排序
+                // Sort by PartNumber
                 usort($parts, function($a, $b) { return $a['number'] <=> $b['number']; });
 
                 generate_s3_list_parts_response($bucket, $key, $uploadId, $parts);
@@ -605,15 +605,15 @@ case 'POST':
             $filesize = filesize($filePath);
             $mimeType = mime_content_type($filePath) ?: 'application/octet-stream';
             
-            // [关键修复 S3 Browser Bug] 移除小文件优化。
-            // 无论文件大小，都必须正确处理 Range 请求。
+            // Critical fix for S3 Browser bug: removed small file optimization.
+            // Range requests must be handled correctly regardless of file size.
 
             $fp = fopen($filePath, 'rb');
             if ($fp === false) {
                 generate_s3_error_response('InternalError', 'Failed to open file', 500, "/{$bucket}/{$key}");
             }
 
-            // 增强的范围请求处理
+            // Enhanced range request handling
             $rangeHeader = $_SERVER['HTTP_RANGE'] ?? '';
             $start = 0;
             $end = $filesize - 1;
@@ -622,7 +622,7 @@ case 'POST':
 
             if ($rangeHeader) {
                 if (preg_match('/bytes=(\d+)-(\d+)/', $rangeHeader, $matches)) {
-                    // 格式: bytes=start-end
+                    // Format: bytes=start-end
                     $rangeStart = (int)$matches[1];
                     $rangeEnd = (int)$matches[2];
                     
@@ -638,7 +638,7 @@ case 'POST':
                     $partialContent = true;
                     
                 } elseif (preg_match('/bytes=(\d+)-$/', $rangeHeader, $matches)) {
-                    // 格式: bytes=start- (从start到文件末尾)
+                    // Format: bytes=start- (from start to end of file)
                     $rangeStart = (int)$matches[1];
                     
                     if ($rangeStart >= $filesize) {
@@ -653,7 +653,7 @@ case 'POST':
                     $partialContent = true;
                     
                 } elseif (preg_match('/bytes=-(\d+)/', $rangeHeader, $matches)) {
-                    // 格式: bytes=-suffix (最后suffix个字节)
+                    // Format: bytes=-suffix (last suffix bytes)
                     $suffix = (int)$matches[1];
                     
                     if ($suffix <= 0) {
@@ -669,7 +669,7 @@ case 'POST':
                 }
             }
 
-            // 计算最终长度
+            // Calculate final length
             $length = $end - $start + 1;
 
             if ($partialContent) {
@@ -682,13 +682,13 @@ case 'POST':
             header('Accept-Ranges: bytes');
             header('Content-Type: ' . $mimeType);
             header('Content-Length: ' . $length);
-            // [优化] S3 客户端需要 filename* 来处理非 ASCII 字符
+            // S3 clients need filename* to handle non-ASCII characters
             $encodedBasename = rawurlencode(basename(decode_s3_key($key)));
             header('Content-Disposition: inline; filename="' . basename(decode_s3_key($key)) . '"; filename*="UTF-8\'\'' . $encodedBasename . '"');
             header('Last-Modified: ' . gmdate('D, d M Y H:i:s T', filemtime($filePath)));
             header('ETag: "' . md5_file($filePath) . '"');
 
-            // 流式传输
+            // Stream transfer
             if ($start > 0) {
                 fseek($fp, $start);
             }
@@ -749,7 +749,7 @@ case 'POST':
 
             if (file_exists($uploadDir)) {
                 safe_delete_directory($uploadDir);
-                // [优化] 尝试清理父级目录
+                // Try to clean up parent directories
                 @rmdir(DATA_DIR . "/{$bucket}/.multipart/{$decodedKey}");
                 @rmdir(DATA_DIR . "/{$bucket}/.multipart");
             }
@@ -762,17 +762,17 @@ case 'POST':
                 generate_s3_error_response('NoSuchBucket', 'Bucket not found', 404, "/{$bucket}");
             }
             
-            // Check if bucket is empty (使用更简单的方式)
+            // Check if bucket is empty
             $items = array_diff(scandir($bucketDir), ['.', '..']);
             if (count($items) > 0) {
-                 // [优化] 检查是否只有 .multipart 目录
+                 // Check if only .multipart directory exists
                 if (count($items) === 1 && $items[2] === '.multipart' && is_dir($bucketDir . '/.multipart')) {
-                     // 如果只有 .multipart 目录，检查它是否为空
+                     // If only .multipart directory exists, check if it's empty
                     $mpItems = array_diff(scandir($bucketDir . '/.multipart'), ['.', '..']);
                     if (count($mpItems) > 0) {
                         generate_s3_error_response('BucketNotEmpty', 'Bucket not empty', 409, "/{$bucket}");
                     }
-                    // .multipart 目录为空，可以删除
+                    // .multipart directory is empty, can be deleted
                     safe_delete_directory($bucketDir . '/.multipart');
                 } else {
                      generate_s3_error_response('BucketNotEmpty', 'Bucket not empty', 409, "/{$bucket}");

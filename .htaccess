@@ -1,10 +1,10 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
-    # 如果请求的不是真实存在的文件或目录
+    # If request is not for existing file or directory
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d
 
-    # 将所有请求重定向到 index.php
+    # Redirect all requests to index.php
     RewriteRule ^(.*)$ index.php [L,QSA]
 </IfModule>
