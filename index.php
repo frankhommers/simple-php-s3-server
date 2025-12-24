@@ -1,11 +1,13 @@
 <?php
 // Minimal S3-like PHP server
 
-// Configuration
-define('DATA_DIR', __DIR__ . '/data');
-define('ALLOWED_ACCESS_KEYS', ['put_your_key_here']);
-define('MAX_REQUEST_SIZE', 100 * 1024 * 1024); // 100MB
-define('S3_XML_NS', 'http://s3.amazonaws.com/doc/2006-03-01/'); // S3 XML namespace
+// Load configuration
+require_once __DIR__ . '/config.php';
+
+// S3 XML namespace (can be overridden in config.php if needed)
+if (!defined('S3_XML_NS')) {
+    define('S3_XML_NS', 'http://s3.amazonaws.com/doc/2006-03-01/');
+}
 
 // Helper functions
 function extract_access_key_id()

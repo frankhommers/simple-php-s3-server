@@ -10,12 +10,12 @@ A lightweight S3-compatible object storage server implemented in PHP, using loca
 - ✅ Multipart upload support
 - ✅ No database required - pure filesystem storage
 - ✅ Simple AWS V4 signature authentication
-- ✅ Lightweight single-file deployment
+- ✅ Lightweight deployment (just 2 files)
 
 
 ## TLDR
 
-Simply create a new website on your virtual host, place the `index.php` file from the GitHub repository into the website's root directory, modify the password configuration at the beginning of `index.php`, then config the rewite rule set all route to index.php, and you're ready to use it.
+Simply create a new website on your virtual host, place the `index.php` and `config.php` files from the GitHub repository into the website's root directory, modify the configuration in `config.php`, then configure the rewrite rule to set all routes to index.php, and you're ready to use it.
 
 - **Endpoint**: Your website domain  
 - **Access Key**: The password you configured  
@@ -43,7 +43,7 @@ You can also combine this with Cloudflare's CDN for faster and more stable perfo
 
 1. Set up a website
 
-2. Download `index.php` to your website root directory
+2. Download `index.php` and `config.php` to your website root directory
 
 3. Create data directory  
 Create a `data` folder in your website root directory
@@ -64,12 +64,19 @@ Create `.htaccess` in root directory with:
 
 ### Configuration
 
-Edit the top section of `index.php`:
+Edit `config.php`:
 ```php
-define('ALLOWED_ACCESS_KEYS', ['your-access-key-here']);  
-// Allowed access keys - when using third-party OSS tools, only the access-key is required.
-// Other fields like region and secret-key can be arbitrary values.
+// Data storage directory
+define('DATA_DIR', __DIR__ . '/data');
+
+// Allowed access keys for authentication
+define('ALLOWED_ACCESS_KEYS', ['your-access-key-here']);
+
+// Maximum request size (default: 100MB)
+define('MAX_REQUEST_SIZE', 100 * 1024 * 1024);
 ```
+
+When using third-party S3 tools, only the access-key is required. Other fields like region and secret-key can be arbitrary values.
 
 ### Start Using It!
 
