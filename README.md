@@ -9,7 +9,7 @@ A lightweight S3-compatible object storage server implemented in PHP, using loca
 - ✅ S3 OBJECT API compatibility (PUT/GET/DELETE/POST)
 - ✅ Multipart upload support
 - ✅ No database required - pure filesystem storage
-- ✅ Simple AWS V4 signature authentication
+- ✅ Full AWS V4 signature authentication (including presigned URLs)
 - ✅ Lightweight deployment (just 2 files)
 
 
@@ -17,10 +17,10 @@ A lightweight S3-compatible object storage server implemented in PHP, using loca
 
 Simply create a new website on your virtual host, place the `index.php` and `config.php` files from the GitHub repository into the website's root directory, modify the configuration in `config.php`, then configure the rewrite rule to set all routes to index.php, and you're ready to use it.
 
-- **Endpoint**: Your website domain  
-- **Access Key**: The password you configured  
-- **Secret Key**: Can be any value (not used in this project)  
-- **Region**: Can be any value (not used in this project)  
+- **Endpoint**: Your website domain
+- **Access Key**: Your configured access key
+- **Secret Key**: Your configured secret key (used for signature verification)
+- **Region**: Can be any value (e.g., `auto` or `us-east-1`)  
 
 For example, if an object has:  
 - `bucket="music"`  
@@ -66,23 +66,27 @@ Create `.htaccess` in root directory with:
 
 Edit `config.php`:
 ```php
+// Debug mode - set to false in production
+define('DEBUG', true);
+
 // Data storage directory
 define('DATA_DIR', __DIR__ . '/data');
 
-// Allowed access keys for authentication
-define('ALLOWED_ACCESS_KEYS', ['your-access-key-here']);
+// Access credentials (access_key => secret_key)
+define('ACCESS_CREDENTIALS', [
+    'your-access-key' => 'your-secret-key',
+]);
 
 // Maximum request size (default: 100MB)
 define('MAX_REQUEST_SIZE', 100 * 1024 * 1024);
 ```
 
-When using third-party S3 tools, only the access-key is required. Other fields like region and secret-key can be arbitrary values.
+Use the same access key and secret key in your S3 client. Both are required for secure signature verification and presigned URL support.
 
 ### Start Using It!
 
-#### Demo: Using in Minio
+#### Demo: Using with Minio Client
 
 ```python
-oss_client = Minio("your-domain.com", access_key="your-access-key-here", secret_key="*", secure=True)
-
+oss_client = Minio("your-domain.com", access_key="your-access-key", secret_key="your-secret-key", secure=True)
 ```

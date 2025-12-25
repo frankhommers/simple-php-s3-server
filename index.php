@@ -4,38 +4,261 @@
 // Load configuration
 require_once __DIR__ . '/config.php';
 
+// Error reporting based on DEBUG setting
+if (defined('DEBUG') && DEBUG) {
+    error_reporting(E_ALL);
+    ini_set('display_errors', 1);
+    // Log all requests to local file for debugging
+    file_put_contents(__DIR__ . '/debug.log', date('Y-m-d H:i:s') . " {$_SERVER['REQUEST_METHOD']} {$_SERVER['REQUEST_URI']}\n", FILE_APPEND);
+} else {
+    error_reporting(0);
+    ini_set('display_errors', 0);
+}
+
 // S3 XML namespace (can be overridden in config.php if needed)
 if (!defined('S3_XML_NS')) {
     define('S3_XML_NS', 'http://s3.amazonaws.com/doc/2006-03-01/');
 }
 
-// Helper functions
-function extract_access_key_id()
-{
-    // Extract from Authorization header
+// AWS Signature V4 Authentication Functions
+
+function get_signing_key($secret_key, $date_stamp, $region, $service) {
+    $k_date = hash_hmac('sha256', $date_stamp, 'AWS4' . $secret_key, true);
+    $k_region = hash_hmac('sha256', $region, $k_date, true);
+    $k_service = hash_hmac('sha256', $service, $k_region, true);
+    $k_signing = hash_hmac('sha256', 'aws4_request', $k_service, true);
+    return $k_signing;
+}
+
+function get_canonical_uri($uri) {
+    $path = parse_url($uri, PHP_URL_PATH);
+    // Normalize the path
+    $segments = explode('/', $path);
+    $normalized = array_map('rawurlencode', array_map('rawurldecode', $segments));
+    return implode('/', $normalized);
+}
+
+function get_canonical_query_string($exclude_signature = true) {
+    $params = $_GET;
+    if ($exclude_signature) {
+        unset($params['X-Amz-Signature']);
+    }
+    ksort($params);
+    $canonical = [];
+    foreach ($params as $key => $value) {
+        $canonical[] = rawurlencode($key) . '=' . rawurlencode($value);
+    }
+    return implode('&', $canonical);
+}
+
+function get_canonical_headers($signed_headers_list) {
+    $headers = [];
+    foreach ($signed_headers_list as $header_name) {
+        $header_name = strtolower(trim($header_name));
+        if ($header_name === 'host') {
+            $headers[$header_name] = strtolower($_SERVER['HTTP_HOST']);
+        } else {
+            $server_key = 'HTTP_' . strtoupper(str_replace('-', '_', $header_name));
+            if (isset($_SERVER[$server_key])) {
+                $headers[$header_name] = trim($_SERVER[$server_key]);
+            } elseif ($header_name === 'content-type' && isset($_SERVER['CONTENT_TYPE'])) {
+                $headers[$header_name] = trim($_SERVER['CONTENT_TYPE']);
+            } elseif ($header_name === 'content-length' && isset($_SERVER['CONTENT_LENGTH'])) {
+                $headers[$header_name] = trim($_SERVER['CONTENT_LENGTH']);
+            }
+        }
+    }
+    ksort($headers);
+    $canonical = '';
+    foreach ($headers as $name => $value) {
+        $canonical .= $name . ':' . $value . "\n";
+    }
+    return $canonical;
+}
+
+function verify_presigned_url() {
+    // Check required parameters
+    $required = ['X-Amz-Algorithm', 'X-Amz-Credential', 'X-Amz-Date', 'X-Amz-Expires', 'X-Amz-SignedHeaders', 'X-Amz-Signature'];
+    foreach ($required as $param) {
+        if (!isset($_GET[$param])) {
+            return false;
+        }
+    }
+
+    // Parse credential
+    $credential_parts = explode('/', $_GET['X-Amz-Credential']);
+    if (count($credential_parts) < 5) {
+        return false;
+    }
+    $access_key = $credential_parts[0];
+    $date_stamp = $credential_parts[1];
+    $region = $credential_parts[2];
+    $service = $credential_parts[3];
+
+    // Check if access key exists
+    if (!isset(ACCESS_CREDENTIALS[$access_key])) {
+        return false;
+    }
+    $secret_key = ACCESS_CREDENTIALS[$access_key];
+
+    // Check expiration
+    $amz_date = $_GET['X-Amz-Date'];
+    $expires = (int)$_GET['X-Amz-Expires'];
+    $request_time = \DateTime::createFromFormat('Ymd\THis\Z', $amz_date, new \DateTimeZone('UTC'));
+    if (!$request_time) {
+        return false;
+    }
+
+    // Get bucket name from URI for per-bucket expiration settings
+    $uri_path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
+    $path_parts = explode('/', trim($uri_path, '/'));
+    $bucket = $path_parts[0] ?? '';
+
+    // Get expiration override for this bucket
+    $override = 0;
+    if (defined('PRESIGNED_URL_EXPIRY')) {
+        $expiry_config = PRESIGNED_URL_EXPIRY;
+        if (isset($expiry_config[$bucket])) {
+            $override = $expiry_config[$bucket];
+        } elseif (isset($expiry_config['_default'])) {
+            $override = $expiry_config['_default'];
+        }
+    }
+
+    // Apply expiration check
+    if ($override === -1) {
+        // Never expire
+    } elseif ($override > 0) {
+        // Use override value
+        $expiry_time = $request_time->getTimestamp() + $override;
+        if (time() > $expiry_time) {
+            generate_s3_error_response('ExpiredToken', 'Request has expired', 403);
+        }
+    } else {
+        // Use client-provided expiration
+        $expiry_time = $request_time->getTimestamp() + $expires;
+        if (time() > $expiry_time) {
+            generate_s3_error_response('ExpiredToken', 'Request has expired', 403);
+        }
+    }
+
+    // Build canonical request
+    $method = $_SERVER['REQUEST_METHOD'];
+    $canonical_uri = get_canonical_uri($_SERVER['REQUEST_URI']);
+    $canonical_query_string = get_canonical_query_string(true);
+    $signed_headers = explode(';', strtolower($_GET['X-Amz-SignedHeaders']));
+    $canonical_headers = get_canonical_headers($signed_headers);
+    $signed_headers_str = implode(';', $signed_headers);
+    $payload_hash = 'UNSIGNED-PAYLOAD';
+
+    $canonical_request = $method . "\n" .
+        $canonical_uri . "\n" .
+        $canonical_query_string . "\n" .
+        $canonical_headers . "\n" .
+        $signed_headers_str . "\n" .
+        $payload_hash;
+
+    // Build string to sign
+    $algorithm = 'AWS4-HMAC-SHA256';
+    $credential_scope = $date_stamp . '/' . $region . '/' . $service . '/aws4_request';
+    $string_to_sign = $algorithm . "\n" .
+        $amz_date . "\n" .
+        $credential_scope . "\n" .
+        hash('sha256', $canonical_request);
+
+    // Calculate signature
+    $signing_key = get_signing_key($secret_key, $date_stamp, $region, $service);
+    $calculated_signature = hash_hmac('sha256', $string_to_sign, $signing_key);
+
+    // Compare signatures
+    return hash_equals($calculated_signature, $_GET['X-Amz-Signature']);
+}
+
+function verify_authorization_header() {
     $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
-    if (preg_match('/AWS4-HMAC-SHA256 Credential=([^\/]+)\//', $authorization, $matches)) {
-        return $matches[1];
+    if (!preg_match('/AWS4-HMAC-SHA256\s+Credential=([^,]+),\s*SignedHeaders=([^,]+),\s*Signature=(.+)/', $authorization, $matches)) {
+        return false;
     }
 
-    // Extract from X-Amz-Credential URL parameter
-    $credential = $_GET['X-Amz-Credential'] ?? '';
-    if ($credential) {
-        $parts = explode('/', $credential);
-        return $parts[0] ?? null;
+    $credential = $matches[1];
+    $signed_headers_str = $matches[2];
+    $provided_signature = $matches[3];
+
+    // Parse credential
+    $credential_parts = explode('/', $credential);
+    if (count($credential_parts) < 5) {
+        return false;
+    }
+    $access_key = $credential_parts[0];
+    $date_stamp = $credential_parts[1];
+    $region = $credential_parts[2];
+    $service = $credential_parts[3];
+
+    // Check if access key exists
+    if (!isset(ACCESS_CREDENTIALS[$access_key])) {
+        return false;
+    }
+    $secret_key = ACCESS_CREDENTIALS[$access_key];
+
+    // Get X-Amz-Date or Date header
+    $amz_date = $_SERVER['HTTP_X_AMZ_DATE'] ?? '';
+    if (!$amz_date) {
+        return false;
     }
 
-    return null;
+    // Build canonical request
+    $method = $_SERVER['REQUEST_METHOD'];
+    $canonical_uri = get_canonical_uri($_SERVER['REQUEST_URI']);
+    $canonical_query_string = get_canonical_query_string(false);
+    $signed_headers = explode(';', strtolower($signed_headers_str));
+    $canonical_headers = get_canonical_headers($signed_headers);
+
+    // Get payload hash
+    $payload_hash = $_SERVER['HTTP_X_AMZ_CONTENT_SHA256'] ?? hash('sha256', file_get_contents('php://input'));
+
+    $canonical_request = $method . "\n" .
+        $canonical_uri . "\n" .
+        $canonical_query_string . "\n" .
+        $canonical_headers . "\n" .
+        $signed_headers_str . "\n" .
+        $payload_hash;
+
+    // Build string to sign
+    $algorithm = 'AWS4-HMAC-SHA256';
+    $credential_scope = $date_stamp . '/' . $region . '/' . $service . '/aws4_request';
+    $string_to_sign = $algorithm . "\n" .
+        $amz_date . "\n" .
+        $credential_scope . "\n" .
+        hash('sha256', $canonical_request);
+
+    // Calculate signature
+    $signing_key = get_signing_key($secret_key, $date_stamp, $region, $service);
+    $calculated_signature = hash_hmac('sha256', $string_to_sign, $signing_key);
+
+    // Compare signatures
+    return hash_equals($calculated_signature, $provided_signature);
 }
 
 function auth_check()
 {
-    $access_key_id = extract_access_key_id();
-    if (!$access_key_id || !in_array($access_key_id, ALLOWED_ACCESS_KEYS)) {
-        // Use standard S3 error codes and HTTP status codes
-        generate_s3_error_response('AccessDenied', 'Access Denied', 401);
+    // Check for presigned URL parameters
+    if (isset($_GET['X-Amz-Signature'])) {
+        if (!verify_presigned_url()) {
+            generate_s3_error_response('SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided', 403);
+        }
+        return true;
     }
-    return true;
+
+    // Check for Authorization header
+    if (isset($_SERVER['HTTP_AUTHORIZATION'])) {
+        if (!verify_authorization_header()) {
+            generate_s3_error_response('SignatureDoesNotMatch', 'The request signature we calculated does not match the signature you provided', 403);
+        }
+        return true;
+    }
+
+    // No authentication provided
+    generate_s3_error_response('AccessDenied', 'Access Denied', 401);
 }
 
 // S3 error response function, separating S3 error codes from HTTP status codes
@@ -721,10 +944,20 @@ case 'POST':
         break;
 
     case 'HEAD':
-        if (empty($bucket) || empty($key)) {
-            generate_s3_error_response('InvalidRequest', 'Bucket and key required', 400);
+        if (empty($bucket)) {
+            // HEAD on root - service check
+            http_response_code(200);
+            exit;
+        } elseif (empty($key)) {
+            // HEAD on bucket - check if bucket exists
+            $bucketDir = DATA_DIR . "/{$bucket}";
+            if (!file_exists($bucketDir)) {
+                generate_s3_error_response('NoSuchBucket', 'Bucket not found', 404, "/{$bucket}");
+            }
+            http_response_code(200);
+            exit;
         }
-        
+
         $filePath = get_file_path($bucket, $key);
         if (!file_exists($filePath)) {
             generate_s3_error_response('NoSuchKey', 'Object not found', 404, "/{$bucket}/{$key}");
